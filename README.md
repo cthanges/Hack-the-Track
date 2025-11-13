@@ -4,11 +4,21 @@ Real-time analytics tool that simulates race-engineering decision-making for opt
 
 ## Features
 
+### Race Strategy
 - **Optimal Pit Window Calculator**: Multi-lap optimizer that evaluates candidate pit stops and selects the timing that minimizes total race time
-- **Tyre Degradation Model**: Linear degradation model (configurable seconds/lap) to estimate lap time increases
+- **Tyre Degradation Model**: Linear degradation model (configurable seconds/lap) OR auto-detected from telemetry lateral G forces
 - **Caution Handler**: Adjusts pit recommendations when yellow flags reduce pit-time cost
-- **Lap-by-Lap Replay**: Step through or auto-replay race data with real-time recommendations
 - **Interactive Tuning**: Adjust pit cost, degradation rate, target stint, and race length via UI controls
+
+### Data Replay
+- **Lap-Level Replay**: Step through or auto-replay lap timing data with real-time recommendations
+- **Telemetry-Level Replay**: High-frequency sensor data replay (100+ Hz) with lap aggregation
+- **Dual Mode Support**: Choose between lap times or telemetry files in UI
+
+### Telemetry Analytics
+- **Auto-Degradation Detection**: Estimates tire wear from actual lateral acceleration data
+- **Real-Time Anomaly Detection**: Alerts for mechanical issues (RPM drops, brake lockups, sensor errors)
+- **Performance Monitoring**: Detects significant performance drops that may indicate damage
 
 ## How It Works
 
@@ -43,23 +53,43 @@ pytest -v
 ```
 
 ## Usage Notes
-- The app will attempt to find lap_time CSV files under `Datasets/` automatically.
-- Select a file and vehicle ID, then step through laps or run a replay.
-- Use the sidebar to tune:
-  - **Target stint**: Fallback max stint length (laps)
-  - **Pit time cost**: Time lost in pit (seconds)
-  - **Tyre degradation**: Lap time increase per lap of tyre age (seconds/lap)
-  - **Total race laps**: Used to compute remaining laps for optimization window
+
+### Lap Time Mode (Default)
+- The app will find lap_time CSV files under `Datasets/` automatically
+- Select a file and vehicle ID, then step through laps or run a replay
+- Degradation rate is manually configured in sidebar
+
+### Telemetry Mode (Advanced)
+1. Select **"Telemetry"** in the Data Type radio button
+2. Choose a telemetry CSV file (or it will auto-detect)
+3. Select vehicle ID
+4. **Degradation is auto-detected** from lateral G forces (early vs late laps)
+5. Click **"Run Anomaly Check"** to scan for mechanical issues
+
+### Sidebar Controls
+- **Target stint**: Fallback max stint length (laps)
+- **Pit time cost**: Time lost in pit (seconds)
+- **Tyre degradation**: Lap time increase per lap (seconds/lap) — auto-detected in telemetry mode
+- **Total race laps**: Used to compute remaining laps for optimization window
 
 ## Files
 
+### Core Modules
 - `src/data_loader.py` — Helpers to find/load lap_time CSVs
 - `src/telemetry_loader.py` — **Robust telemetry data loader** with data quality handling (see [TELEMETRY_GUIDE.md](TELEMETRY_GUIDE.md))
-- `src/simulator.py` — Lap-level replay engine
-- `src/analytics/pit_strategy.py` — **Multi-lap pit window optimizer** with degradation model
+- `src/simulator.py` — Lap-level and **telemetry-level replay engines** (SimpleSimulator, TelemetrySimulator)
+
+### Analytics
+- `src/analytics/pit_strategy.py` — **Multi-lap pit window optimizer** with telemetry-based degradation estimation
 - `src/analytics/caution_handler.py` — Caution decision logic
-- `tests/test_pit_strategy.py` — Unit tests for pit optimizer
+- `src/analytics/anomaly_detection.py` — **Real-time anomaly detection** (engine, brakes, performance)
+
+### Testing
+- `tests/test_pit_strategy.py` — Unit tests for pit optimizer (4 tests)
 - `tests/test_telemetry_loader.py` — Unit tests for telemetry loader (14 tests)
+- `tests/test_telemetry_integration.py` — **Integration tests for telemetry features** (11 tests)
+
+**Total: 29 tests, all passing ✓**
 
 ## Telemetry Support
 
