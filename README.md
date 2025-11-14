@@ -1,6 +1,8 @@
-# Race Engineer — Streamlit MVP
+# GuidoAI
 
-Real-time analytics tool that simulates race-engineering decision-making for optimal pit strategy and caution responses.
+**AI-Powered Race Strategy Analytics**
+
+Real-time analytics tool that uses probabilistic AI to optimize pit strategy, analyze traffic patterns, and predict caution scenarios for racing teams.
 
 ## Features
 
