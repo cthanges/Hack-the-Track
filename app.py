@@ -54,6 +54,16 @@ with st.sidebar:
             st.info('No endurance analysis files found. Upload one to enable traffic analysis.')
             endurance_choice = st.file_uploader('Upload endurance CSV', type=['csv'])
             enable_traffic = False  # Disable if no file
+    
+    st.markdown('---')
+    st.header('Caution Probability')
+    enable_caution = st.checkbox('Enable caution analysis', value=False,
+                                  help='Use probabilistic modeling to factor caution likelihood into pit strategy')
+    if enable_caution:
+        cautions_per_race = st.slider('Expected cautions per race', 0.0, 5.0, 2.0, 0.5,
+                                       help='Average number of caution periods expected in this race')
+        show_caution_details = st.checkbox('Show detailed scenarios', value=True,
+                                           help='Display probability distribution and scenario breakdown')
 
 if not choice:
     st.warning(f'Please select or upload a {file_type.lower()} CSV to begin.')
@@ -248,9 +258,7 @@ def _update_traffic_display(rec, traffic_model, car_number, lap,
     if not all([position_box, gap_leader_box, gap_ahead_box, traffic_impact_box]):
         return
     
-    # Debug: show what's in rec
     if 'field_position' not in rec:
-        traffic_impact_box.warning(f"⚠️ No traffic data in recommendation. Keys: {list(rec.keys())}")
         return
     
     if 'field_position' in rec:
@@ -278,6 +286,75 @@ def _update_traffic_display(rec, traffic_model, car_number, lap,
     if 'undercut_opportunities' in rec and rec['undercut_opportunities']:
         impact_text.append("\n**🎯 Undercut Opportunities:**")
         for opp in rec['undercut_opportunities']:
+            impact_text.append(f"- Car #{opp['target_car']} (P{opp['target_position']}): +{opp['advantage']}s advantage ({opp['confidence']})")
+    
+    if impact_text:
+        traffic_impact_box.markdown('\n'.join(impact_text))
+    else:
+        traffic_impact_box.info('No significant traffic impact detected')
+
+
+def _update_caution_display(caution_analysis, show_details=False):
+    """Update caution probability display elements."""
+    st.markdown('---')
+    st.subheader('🚩 Caution Analysis')
+    
+    # Show recommended strategy
+    strategy_emoji = {
+        'pit_now': '⛽',
+        'wait_for_caution': '⏳',
+        'optimal_timing': '🎯'
+    }
+    
+    rec_strategy = caution_analysis.get('recommended_strategy', 'unknown')
+    emoji = strategy_emoji.get(rec_strategy, '❓')
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric('Strategy', f"{emoji} {rec_strategy.replace('_', ' ').title()}")
+    
+    with col2:
+        confidence = caution_analysis.get('confidence', 'unknown')
+        conf_emoji = {'high': '✅', 'medium': '⚠️', 'low': '❌'}.get(confidence, '❓')
+        st.metric('Confidence', f"{conf_emoji} {confidence.title()}")
+    
+    with col3:
+        time_saved = caution_analysis.get('expected_time_saved', 0)
+        st.metric('Expected Savings', f"{time_saved:.1f}s", 
+                 delta=f"{time_saved:.1f}s" if time_saved != 0 else None)
+    
+    # Show caution probability
+    prob_next_10 = caution_analysis.get('caution_probability_next_10_laps', 0)
+    st.progress(min(1.0, prob_next_10), text=f"Caution probability (next 10 laps): {prob_next_10*100:.1f}%")
+    
+    # Show detailed scenarios if enabled
+    if show_details and 'scenarios' in caution_analysis:
+        st.markdown('#### Scenario Breakdown')
+        scenarios = caution_analysis['scenarios']
+        
+        if scenarios:
+            scenario_df = pd.DataFrame([
+                {
+                    'Laps Until Caution': s['laps_until'],
+                    'Probability': f"{s['probability']*100:.1f}%",
+                    'Time Saved': f"{s['time_saved']:.1f}s",
+                    'Confidence': s['confidence']
+                }
+                for s in scenarios
+            ])
+            st.dataframe(scenario_df, use_container_width=True)
+        
+        # Show strategy comparison
+        if 'strategies' in caution_analysis:
+            st.markdown('#### Strategy Comparison')
+            strat_df = pd.DataFrame(caution_analysis['strategies'])
+            strat_df['expected_time'] = strat_df['expected_time'].round(1)
+            strat_df['variance'] = strat_df['variance'].round(1)
+            st.dataframe(strat_df, use_container_width=True)
+
+
+
             confidence_emoji = {'high': '🔥', 'medium': '⚡', 'low': '💡'}
             emoji = confidence_emoji.get(opp['confidence'], '•')
             impact_text.append(
@@ -309,10 +386,6 @@ if step_button or run_button:
                 # compute recommendation with remaining laps
                 remaining = total_race_laps - lap if total_race_laps > lap else None
                 
-                # Debug: log what we're passing
-                if enable_traffic and traffic_model and car_number:
-                    st.sidebar.info(f"🔍 Calling recommend_pit: lap={lap}, car={car_number}, traffic_model={'loaded' if traffic_model else 'None'}")
-                
                 rec = recommend_pit(
                     lap, last_pit_lap, last_laps, 
                     target_stint=target_stint, 
@@ -321,10 +394,18 @@ if step_button or run_button:
                     degradation_per_lap=degradation_rate,
                     traffic_model=traffic_model,
                     car_number=car_number,
-                    consider_traffic=enable_traffic
+                    consider_traffic=enable_traffic,
+                    consider_caution=enable_caution,
+                    total_laps=total_race_laps if enable_caution else None,
+                    cautions_per_race=cautions_per_race if enable_caution else 2.0
                 )
                 placeholder.metric('Lap', lap, delta=None)
                 info_box.json(rec)
+                
+                # Display caution analysis if enabled
+                if enable_caution and rec.get('caution_analysis'):
+                    _update_caution_display(rec['caution_analysis'], 
+                                           show_caution_details if enable_caution else False)
                 
                 # Update traffic displays
                 if enable_traffic and traffic_model and car_number:
