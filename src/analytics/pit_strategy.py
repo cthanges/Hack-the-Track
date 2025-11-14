@@ -1,6 +1,7 @@
 from typing import List, Dict, Optional
 import numpy as np
 import pandas as pd
+from src.analytics.traffic_model import TrafficModel, TrafficOpportunity
 
 
 def estimate_degradation_from_telemetry(telemetry_df: pd.DataFrame, 
@@ -72,7 +73,10 @@ def recommend_pit(current_lap: int,
                   target_stint: int = 20,
                   pit_time_cost: float = 20.0,
                   remaining_laps: Optional[int] = None,
-                  degradation_per_lap: float = 0.15) -> Dict:
+                  degradation_per_lap: float = 0.15,
+                  traffic_model: Optional[TrafficModel] = None,
+                  car_number: Optional[int] = None,
+                  consider_traffic: bool = True) -> Dict:
     """Multi-lap pit window optimizer that computes expected time-to-finish for candidate strategies.
 
     Strategy:
@@ -81,6 +85,7 @@ def recommend_pit(current_lap: int,
        - Tyre degradation model (lap time increases linearly with tyre age)
        - Fresh tyre benefit (reset degradation after pit)
        - Pit time cost
+       - Traffic impact (optional, if traffic_model provided)
     3. Return the pit lap that minimizes total expected time.
 
     Args:
@@ -91,6 +96,9 @@ def recommend_pit(current_lap: int,
         pit_time_cost: Time lost in pit (seconds)
         remaining_laps: Laps remaining in race (if known). If None, uses target_stint as proxy.
         degradation_per_lap: Seconds lost per lap due to tyre wear
+        traffic_model: Optional TrafficModel for position-aware recommendations
+        car_number: Your car number (required if traffic_model provided)
+        consider_traffic: Whether to factor traffic into decision (default True)
 
     Returns:
         Dict with keys:
@@ -98,8 +106,50 @@ def recommend_pit(current_lap: int,
         - reason: Explanation string
         - score: Expected time saved vs no-pit baseline (negative = time lost)
         - candidates: List of evaluated strategies with expected times
+        - field_position: Current position (if traffic_model provided)
+        - position_after_pit: Expected position after pit (if traffic_model provided)
+        - undercut_opportunities: List of undercut chances (if traffic_model provided)
     """
     current_stint = current_lap - last_pit_lap
+    
+    # Traffic analysis (if available)
+    traffic_info = {}
+    undercut_opportunities = []
+    
+    # Debug logging
+    import sys
+    print(f"DEBUG recommend_pit: traffic_model={traffic_model is not None}, car_number={car_number}, consider_traffic={consider_traffic}, current_lap={current_lap}", file=sys.stderr)
+    
+    if traffic_model and car_number and consider_traffic:
+        current_pos = traffic_model.get_field_position(car_number, current_lap)
+        print(f"DEBUG: current_pos = {current_pos}", file=sys.stderr)
+        if current_pos:
+            traffic_info['field_position'] = current_pos.position
+            traffic_info['gap_to_leader'] = round(current_pos.gap_to_leader, 2)
+            traffic_info['gap_to_ahead'] = round(current_pos.gap_to_ahead, 2)
+            
+            # Detect undercut opportunities
+            # Need to track other cars' stint lengths (simplified: assume similar to ours)
+            laps_since_pit_ahead = {pos.car_number: current_stint for pos in traffic_model.get_running_order(current_lap)}
+            
+            undercut_opportunities = traffic_model.detect_undercut_opportunities(
+                car_number=car_number,
+                current_lap=current_lap,
+                pit_time_loss=pit_time_cost,
+                degradation_rate=degradation_per_lap,
+                laps_since_pit_ahead=laps_since_pit_ahead
+            )
+            
+            traffic_info['undercut_opportunities'] = [
+                {
+                    'target_car': opp.target_car_number,
+                    'target_position': opp.target_position,
+                    'advantage': round(opp.pit_now_advantage, 2),
+                    'confidence': opp.confidence,
+                    'description': opp.description
+                }
+                for opp in undercut_opportunities
+            ]
     
     # Estimate baseline lap time from recent laps
     if len(last_laps_seconds) > 0:
@@ -178,21 +228,47 @@ def recommend_pit(current_lap: int,
     
     # Only recommend pit if it saves time
     if best["delta_vs_no_pit"] < -0.5:  # At least 0.5s benefit
-        return {
+        result = {
             "recommended_lap": best["pit_lap"],
             "reason": "optimal_window",
             "score": round(time_saved, 2),
             "candidates": candidates,
             "no_pit_time": round(no_pit_time, 2)
         }
+        
+        # Add traffic info
+        result.update(traffic_info)
+        
+        # Enhance reason if undercut opportunity
+        if undercut_opportunities:
+            high_conf_undercuts = [o for o in undercut_opportunities if o.confidence == 'high']
+            if high_conf_undercuts:
+                result['reason'] = 'undercut_opportunity'
+                result['undercut_target'] = high_conf_undercuts[0].target_car_number
+        
+        # Add projected position
+        if traffic_model and car_number:
+            est_pos, est_gap = traffic_model.estimate_position_after_pit(
+                car_number, current_lap, pit_time_cost
+            )
+            if est_pos:
+                result['position_after_pit'] = est_pos
+                result['gap_after_pit'] = round(est_gap, 2)
+        
+        return result
     else:
-        return {
+        result = {
             "recommended_lap": None,
             "reason": "no_net_benefit",
             "score": round(time_saved, 2),
             "candidates": candidates,
             "no_pit_time": round(no_pit_time, 2)
         }
+        
+        # Add traffic info even when not recommending pit
+        result.update(traffic_info)
+        
+        return result
 
 
 def _compute_stint_time(baseline_lap_time: float,
